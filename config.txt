@@ -1,0 +1,3 @@
+[LOGIN]
+email = helio_lima@outlook.com.br
+senha = senhaerrada232425
