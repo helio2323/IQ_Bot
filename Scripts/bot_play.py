@@ -74,6 +74,15 @@ def payout(par, tipo,  API, timeframe = 1):
 			time.sleep(1)
 		API.unsubscribe_strike_list(par, timeframe)
 		return d
+def estrategiaR7(ativo, API):
+    velas = API.get_candles(ativo, 60, 1, time.time())
+    velas[0] = 'A' if velas[0]['open'] < velas[0]['close'] else 'B' if velas[0]['open'] > velas[0]['close'] else 'D'
+    cores = velas[0]
+    if cores == 'A':
+        cores = 'call'
+    if cores == 'B':
+        cores = 'put'    
+    return cores
 
 def coletaCores3ultimasVelasM1(ativo, API):
     # A - Alta, B - Baixa, D - Doji
@@ -82,6 +91,13 @@ def coletaCores3ultimasVelasM1(ativo, API):
     velas[1] = 'A' if velas[1]['open'] < velas[1]['close'] else 'B' if velas[1]['open'] > velas[1]['close'] else 'D'
     velas[2] = 'A' if velas[2]['open'] < velas[2]['close'] else 'B' if velas[2]['open'] > velas[2]['close'] else 'D'
     cores = velas[0] + ' ' + velas[1] + ' ' + velas[2]   
+    return cores
+
+def coletaCoresultimaVelasM1(ativo, API):
+    # A - Alta, B - Baixa, D - Doji
+    velas = API.get_candles(ativo, 60, 1, time.time())     
+    velas[0] = 'A' if velas[0]['open'] < velas[0]['close'] else 'B' if velas[0]['open'] > velas[0]['close'] else 'D'
+    cores = velas[0]
     return cores
 
 def direcional_MHI(cores):
@@ -125,8 +141,13 @@ delay      = 2       # Atraso para entrada nos trades
 lucro = 0
 cont = 0    # Variável para contar o número de candles
 total_trades = 0
-n_espera = 0 # dicionario que coleta a qtd de candle de epera para os ciclos
+n_espera = 5 # dicionario que coleta a qtd de candle de epera para os ciclos
 novoCandle = False
+
+#contagem de acertos
+ttWins = 0
+ttLoss = 0
+velaAtual = 0
 
 while True:
     
@@ -161,6 +182,11 @@ while True:
         cores = coletaCores3ultimasVelasM1(ativo, API)
        
         direcao = direcional_MHI(cores)
+
+        if direcao == 'call':
+            direcaoEntrada = 'A'
+        else:
+            direcaoEntrada = 'B'     
         
         if direcao =='':
             print('Não vamos operar... Cores indefinidas: ', cores)
@@ -173,63 +199,66 @@ while True:
             print('Direção da aposta:',direcao)
             
             valor_entrada = valor_entrada_b
-            
-            for i in range(martingale+1):
+      
+            while True:
                 
-                while True:
+                d = datetime.now()
+                minutos = d.minute
+                segundos = d.second
+                
+                print(ativo,', NewBar? - ', novoCandle, " - Num Bar = ", cont, ", Seg = ", segundos, ", Trade = ",total_trades)
+                
+                if segundos == 58:
+                
+                    status,id_ = API.buy(valor_entrada, ativo, direcao, 1)
+                    cont += 1
+                    print('Estamos posicionados numa '+direcao)
+                    total_trades += 1
+
+                    break
+
+                time.sleep(1)
                     
+            contador = 1
+            if status:
+                while True:
                     d = datetime.now()
                     minutos = d.minute
                     segundos = d.second
-                    
-                    print(ativo,', NewBar? - ', novoCandle, " - Num Bar = ", cont, ", Seg = ", segundos, ", Trade = ",total_trades)
+                    checkcor = coletaCoresultimaVelasM1(ativo, API)
 
-                    if segundos == 58:
+                    if direcaoEntrada ==  checkcor:
+                        print('Estamos VENCENDO a operação, mas precisamos aguardar o fim da vela')
+                        print(f'direção: ' + direcao + ' cor da vela: ' + checkcor)
+                        print(f'Aguardando término da operação: {str(contador)} segundos')
+                        print('----------------------------------------------------------------------------------')
+                    else:
+                        print('Estamos PERDENDO a operação, mas precisamos aguardar o fim da vela')
+                        print(f'direção: ' + direcao + ' cor da vela: ' + checkcor)
+                        print(f'Aguardando término da operação: {str(contador)} segundos')
+                        print('----------------------------------------------------------------------------------')                                
                     
-                        status,id_ = API.buy(valor_entrada, ativo, direcao, 1)
-                        cont += 1
-                        print('Estamos posicionados numa '+direcao)
-                        total_trades += 1
-
+                    if(contador == 45):
+                        print('A operação está quase terminando, vamos aguardar o resultado...')
+                        status,valor = API.check_win_v4(id_)
+                        print('Estamos checando o resultado da operação: ', status)
+                    
+                    if status == 'win':
+                        cont = 0
                         break
-
-                    time.sleep(1)
-
-                if status:
-                    while True:
-                        status,valor = API.check_win_digital_v2(id_)
+                    if status == 'loose':
+                        print('Perdemos a operação, vamos preparar o Martingale')
+                        contador = 1
+                        status,id_ = API.buy(valor_entrada, ativo, direcao, 1)
                         
-                        if status:
-                            valor = valor if valor > 0 else float('-' + str(abs(valor_entrada)))
-                            lucro += round(valor, 2)
-                            
-                            print('----------------------------------------------------------------------------------')
-                            print('Resultado: rastreio da MHI : ', end='')
-                            print(':: WIN |' if valor > 0 else 'LOSS |' , round(valor, 2) ,'|', round(lucro, 2),('|'+str(i)+ ' GALE' if i > 0 else '' ))
-                            
-                            
-                            valor_entrada = Martingale(valor_entrada, payout/100)
-                            
-                            stop(lucro, stop_gain, stop_loss)
-                            
-                            if(valor > 0 and i > 0): # caso ele ganhe depois de um gale precisamos add uma unidade
-                                cont += 1
-                                print("::: Saimos no win e precisamos contar UM: ",cont )
-                            
-                            #if(valor < 0  and i== martingale):
-                             #   cont += 1
-                             #   print("::: Saímos no loss e precisamos contar UM: ",cont )
-                            
-                            entrar = False
-                            break
-                            
-                    if valor > 0 : break                
-                else:
-                    print('\nERRO AO REALIZAR OPERAÇÃO\n\n')
-                if(i>0): # só quero começar a adcionar um depois do primeiro gale!!!
-                    cont += 1
-                print('Iterando = ',i,', Tivemos um incremento por causa do Gale - Vela = ',cont)
-                print('Vamos operar mais uma '+ direcao+", Com entrada de ", valor_entrada,", e Payout = ", payout)       
-       
+                    time.sleep(1)
+                    contador += 1
+                    cont = 0      
+
+                                
+            else:
+                print('\nERRO AO REALIZAR OPERAÇÃO\n\n')
+    
+    
     time.sleep(1)
 
